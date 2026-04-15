@@ -1,0 +1,168 @@
+rank,feature,group,mean_abs_shap
+1,eyeball_asym_right_voxels,Eyeball,0.0120158297035146
+2,lateral_rectus_shape_volume_mm3,Lateral Rectus,0.0108738263860412
+3,lateral_rectus_shape_volume_voxels,Lateral Rectus,0.0090317241760565
+4,lateral_rectus_asym_left_voxels,Lateral Rectus,0.0086161854979371
+5,ratio_mr_to_lr,Clinical,0.008446259311772
+6,muscle_shape_volume_mm3,Muscle (generic),0.0080099656173222
+7,muscle_int_kurtosis,Muscle (generic),0.0078376772914791
+8,muscle_asym_left_voxels,Muscle (generic),0.0076878973747531
+9,muscle_shape_volume_voxels,Muscle (generic),0.0076383141445094
+10,lateral_rectus_asym_right_voxels,Lateral Rectus,0.0073708447840658
+11,optic_nerve_shape_volume_voxels,Optic Nerve,0.007183143138472
+12,fat_shape_ar_dx_dz,Fat,0.0064711021363231
+13,ratio_muscle_to_eyeball,Clinical,0.0062821459964586
+14,eyeball_int_skewness,Eyeball,0.0061627090991981
+15,fat_int_skewness,Fat,0.006143324283119
+16,optic_nerve_shape_volume_mm3,Optic Nerve,0.0060658217197445
+17,muscle_int_skewness,Muscle (generic),0.0057539828986987
+18,optic_nerve_int_skewness,Optic Nerve,0.005495752561166
+19,eyeball_int_kurtosis,Eyeball,0.0054647222015463
+20,optic_nerve_asym_left_voxels,Optic Nerve,0.00528173807776
+21,ratio_fat_to_muscle,Clinical,0.0051882532425836
+22,eyeball_tex_contrast,Eyeball,0.0050815085139575
+23,eyeball_shape_volume_mm3,Eyeball,0.0050574261228929
+24,ratio_nerve_to_fat,Clinical,0.0049947185902198
+25,optic_nerve_tex_energy,Optic Nerve,0.0049586618520972
+26,ratio_total_muscle_to_fat,Clinical,0.0049057114132762
+27,optic_nerve_tex_homogeneity,Optic Nerve,0.0046802738507055
+28,eyeball_shape_volume_voxels,Eyeball,0.004415002592328
+29,optic_nerve_int_kurtosis,Optic Nerve,0.0043640725806164
+30,superior_rectus_int_kurtosis,Superior Rectus,0.004349800867958
+31,medial_rectus_shape_ar_dx_dy,Medial Rectus,0.0039022088069396
+32,optic_nerve_tex_correlation,Optic Nerve,0.0038268335045242
+33,muscle_shape_ar_dx_dz,Muscle (generic),0.0037006389714008
+34,medial_rectus_tex_correlation,Medial Rectus,0.0036439834603873
+35,muscle_tex_homogeneity,Muscle (generic),0.0035665666723743
+36,Age,Clinical,0.0034338320373617
+37,eyeball_tex_correlation,Eyeball,0.0033576368204054
+38,fat_asym_asymmetry,Fat,0.0033447461606406
+39,medial_rectus_asym_asymmetry,Medial Rectus,0.0033176594580298
+40,fat_asym_right_voxels,Fat,0.0032261315970279
+41,optic_nerve_asym_right_voxels,Optic Nerve,0.0031800324172012
+42,medial_rectus_tex_contrast,Medial Rectus,0.0031263050910156
+43,eyeball_asym_left_voxels,Eyeball,0.0030435638949362
+44,fat_asym_left_voxels,Fat,0.0030246692138938
+45,fat_shape_volume_voxels,Fat,0.0030030250447902
+46,inferior_rectus_tex_energy,Inferior Rectus,0.0029458942835167
+47,fat_shape_volume_mm3,Fat,0.0028789032957253
+48,muscle_tex_correlation,Muscle (generic),0.0028663997998442
+49,lateral_rectus_shape_ar_dx_dz,Lateral Rectus,0.0028282023879738
+50,superior_rectus_tex_energy,Superior Rectus,0.0027340052553643
+51,optic_nerve_asym_asymmetry,Optic Nerve,0.0024588517993592
+52,medial_rectus_shape_volume_mm3,Medial Rectus,0.0024437687701759
+53,medial_rectus_shape_bb_dx_mm,Medial Rectus,0.0024056054137913
+54,muscle_tex_energy,Muscle (generic),0.0024039406913419
+55,lateral_rectus_shape_ar_dy_dz,Lateral Rectus,0.0023854489335367
+56,lateral_rectus_tex_correlation,Lateral Rectus,0.0023851446829323
+57,lacrimal_gland_asym_asymmetry,Lacrimal Gland,0.002381061055923
+58,muscle_shape_bb_dz_mm,Muscle (generic),0.0023350570338182
+59,DiseaseDuration,Clinical,0.0023151982986015
+60,inferior_rectus_tex_contrast,Inferior Rectus,0.0022678237538263
+61,eyeball_shape_ar_dx_dy,Eyeball,0.0022289006308572
+62,ratio_nerve_to_eyeball,Clinical,0.0021726204272958
+63,medial_rectus_shape_volume_voxels,Medial Rectus,0.0021263531855019
+64,inferior_rectus_asym_asymmetry,Inferior Rectus,0.0021200165447724
+65,superior_rectus_tex_homogeneity,Superior Rectus,0.002103854258152
+66,lateral_rectus_shape_bb_dz_mm,Lateral Rectus,0.0020987594461791
+67,lateral_rectus_shape_bb_dx,Lateral Rectus,0.0020718659856375
+68,fat_tex_homogeneity,Fat,0.0020620817136303
+69,optic_nerve_shape_ar_dy_dz,Optic Nerve,0.002054192593542
+70,inferior_rectus_tex_homogeneity,Inferior Rectus,0.0020521860855584
+71,lateral_rectus_tex_energy,Lateral Rectus,0.0020493411899799
+72,superior_rectus_shape_bb_dx,Superior Rectus,0.0020417968374708
+73,superior_rectus_shape_ar_dx_dy,Superior Rectus,0.0020217163260488
+74,muscle_asym_right_voxels,Muscle (generic),0.0019325043134585
+75,eyeball_shape_ar_dy_dz,Eyeball,0.0018900708731151
+76,medial_rectus_int_kurtosis,Medial Rectus,0.0018859258354475
+77,eyeball_int_mean,Eyeball,0.0018402074273821
+78,lacrimal_gland_shape_volume_voxels,Lacrimal Gland,0.0018392478179296
+79,medial_rectus_shape_bb_dx,Medial Rectus,0.001790758888121
+80,inferior_rectus_shape_ar_dx_dy,Inferior Rectus,0.0017604410024804
+81,eyeball_shape_bb_dy,Eyeball,0.0017581854863129
+82,medial_rectus_shape_bb_dy,Medial Rectus,0.0017163887123268
+83,eyeball_asym_asymmetry,Eyeball,0.0017087271018167
+84,muscle_shape_ar_dy_dz,Muscle (generic),0.0016986387180834
+85,superior_rectus_tex_correlation,Superior Rectus,0.0016901341962093
+86,inferior_rectus_int_kurtosis,Inferior Rectus,0.0016732309479498
+87,eyeball_int_median,Eyeball,0.0016711659717987
+88,inferior_rectus_asym_right_voxels,Inferior Rectus,0.001671139267391
+89,optic_nerve_shape_ar_dx_dy,Optic Nerve,0.0016707462576934
+90,inferior_rectus_int_std,Inferior Rectus,0.0016699041353999
+91,inferior_rectus_int_mean,Inferior Rectus,0.0016664938637501
+92,fat_tex_correlation,Fat,0.0016650551536851
+93,lateral_rectus_shape_bb_dy,Lateral Rectus,0.0016627968719289
+94,eyeball_shape_bb_dy_mm,Eyeball,0.0016543149387543
+95,lacrimal_gland_asym_left_voxels,Lacrimal Gland,0.001654211228661
+96,medial_rectus_int_skewness,Medial Rectus,0.001632563085293
+97,fat_tex_contrast,Fat,0.0016123382027995
+98,inferior_rectus_shape_volume_voxels,Inferior Rectus,0.001585456734171
+99,superior_rectus_asym_left_voxels,Superior Rectus,0.0015801683960495
+100,superior_rectus_asym_asymmetry,Superior Rectus,0.0015796149219004
+101,fat_int_median,Fat,0.001575542261906
+102,fat_shape_bb_dx_mm,Fat,0.0015679326179136
+103,lateral_rectus_shape_bb_dx_mm,Lateral Rectus,0.0015532820972933
+104,fat_tex_energy,Fat,0.001507804228245
+105,optic_nerve_shape_bb_dy,Optic Nerve,0.0015046821296447
+106,superior_rectus_shape_bb_dy,Superior Rectus,0.0014514526453741
+107,inferior_rectus_asym_left_voxels,Inferior Rectus,0.0014483529652841
+108,superior_rectus_shape_volume_voxels,Superior Rectus,0.0014454670793557
+109,superior_rectus_int_p10,Superior Rectus,0.0014415001330203
+110,superior_rectus_shape_bb_dx_mm,Superior Rectus,0.0014409838106937
+111,medial_rectus_tex_homogeneity,Medial Rectus,0.0014255798664056
+112,lacrimal_gland_tex_homogeneity,Lacrimal Gland,0.0014079489009009
+113,superior_rectus_tex_contrast,Superior Rectus,0.0013959889566657
+114,medial_rectus_asym_left_voxels,Medial Rectus,0.0013861453055768
+115,medial_rectus_shape_bb_dy_mm,Medial Rectus,0.0013850922450794
+116,eyeball_int_p10,Eyeball,0.0013815384455648
+117,inferior_rectus_shape_bb_dx,Inferior Rectus,0.0013654360915031
+118,lateral_rectus_int_kurtosis,Lateral Rectus,0.0013603004855799
+119,fat_shape_ar_dy_dz,Fat,0.001359262070496
+120,lacrimal_gland_int_skewness,Lacrimal Gland,0.0013586248967152
+121,lateral_rectus_shape_ar_dx_dy,Lateral Rectus,0.0013414987277797
+122,fat_shape_ar_dx_dy,Fat,0.0013367178271047
+123,inferior_rectus_shape_bb_dy_mm,Inferior Rectus,0.001335301497013
+124,inferior_rectus_shape_bb_dy,Inferior Rectus,0.0013261603935104
+125,muscle_asym_asymmetry,Muscle (generic),0.0013226281544657
+126,medial_rectus_shape_ar_dx_dz,Medial Rectus,0.0013224092097565
+127,ratio_eyeball_to_fat,Clinical,0.0013186851602646
+128,medial_rectus_shape_ar_dy_dz,Medial Rectus,0.0013078109533838
+129,optic_nerve_shape_bb_dy_mm,Optic Nerve,0.0013063653798593
+130,medial_rectus_int_median,Medial Rectus,0.0012941868293842
+131,lateral_rectus_asym_asymmetry,Lateral Rectus,0.001292017415685
+132,lacrimal_gland_shape_volume_mm3,Lacrimal Gland,0.0012860902569108
+133,muscle_shape_ar_dx_dy,Muscle (generic),0.0012839409153986
+134,fat_shape_bb_dx,Fat,0.001281912307575
+135,medial_rectus_tex_energy,Medial Rectus,0.0012655466886702
+136,lateral_rectus_tex_homogeneity,Lateral Rectus,0.0012633723750269
+137,lacrimal_gland_shape_bb_dy_mm,Lacrimal Gland,0.0012572659791195
+138,lacrimal_gland_tex_correlation,Lacrimal Gland,0.0012370708263188
+139,inferior_rectus_shape_volume_mm3,Inferior Rectus,0.0012340446716965
+140,muscle_int_std,Muscle (generic),0.0012281316967343
+141,inferior_rectus_int_skewness,Inferior Rectus,0.0012255948011733
+142,lateral_rectus_int_skewness,Lateral Rectus,0.0012239921528792
+143,lacrimal_gland_int_median,Lacrimal Gland,0.0012119704246066
+144,lacrimal_gland_tex_energy,Lacrimal Gland,0.0012033100175726
+145,lateral_rectus_shape_bb_dz,Lateral Rectus,0.0011954236704062
+146,fat_int_kurtosis,Fat,0.0011864337185832
+147,lacrimal_gland_int_kurtosis,Lacrimal Gland,0.001182050550214
+148,optic_nerve_int_mean,Optic Nerve,0.0011686216089705
+149,medial_rectus_asym_right_voxels,Medial Rectus,0.0011624079043972
+150,optic_nerve_shape_ar_dx_dz,Optic Nerve,0.0011623318664046
+151,eyeball_int_p90,Eyeball,0.0011599933299135
+152,fat_int_mean,Fat,0.0011581178780401
+153,eyeball_tex_homogeneity,Eyeball,0.0011536205863875
+154,inferior_rectus_int_p10,Inferior Rectus,0.0011374219581662
+155,superior_rectus_shape_ar_dy_dz,Superior Rectus,0.0011277029995629
+156,lacrimal_gland_tex_contrast,Lacrimal Gland,0.0011091972109166
+157,optic_nerve_tex_contrast,Optic Nerve,0.0010959262602883
+158,muscle_shape_bb_dx_mm,Muscle (generic),0.0010951558045714
+159,fat_shape_bb_dy_mm,Fat,0.0010852587951728
+160,ratio_lacrimal_to_fat,Clinical,0.0010669619528456
+161,lateral_rectus_shape_bb_dy_mm,Lateral Rectus,0.0010629935599117
+162,superior_rectus_shape_bb_dy_mm,Superior Rectus,0.0010495130868323
+163,optic_nerve_int_std,Optic Nerve,0.0010483273406881
+164,inferior_rectus_int_p90,Inferior Rectus,0.0010426761068873
+165,lacrimal_gland_asym_right_voxels,Lacrimal Gland,0.0010420577609949
+166,muscle_int_mean,Muscle (generic),0.0010349184275763
+167,inferior_rectus_shape_ar_dx_dz,Inferior Rectus,0.0010071571246889
