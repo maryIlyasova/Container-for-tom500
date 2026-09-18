@@ -963,19 +963,19 @@ def run_shap_analysis(
 
     ax = plt.gca()
     ax.set_facecolor(PALETTE["panel"])
-    ax.tick_params(colors=PALETTE["muted"], labelsize=8)
+    ax.tick_params(colors=PALETTE["muted"], labelsize=12)
     for spine in ["bottom", "left"]:
         ax.spines[spine].set_edgecolor(PALETTE["border"])
     for spine in ["top", "right"]:
         ax.spines[spine].set_visible(False)
     ax.set_xlabel("SHAP value  (impact on model output — predicting CAS ≥ 2)",
-                  color=PALETTE["muted"], fontsize=9)
+                  color=PALETTE["muted"], fontsize=13)
     ax.grid(axis="x", color=PALETTE["gridl"], lw=0.8, alpha=0.8)
     ax.set_axisbelow(True)
 
     plt.title(
         "SHAP Summary  ·  CAS ≥ 2 Prediction  (Combined Arm · RF)",
-        color=PALETTE["text"], fontsize=15, fontweight="bold",
+        color=PALETTE["text"], fontsize=19, fontweight="bold",
         fontfamily="monospace", pad=14,
     )
 
@@ -984,7 +984,7 @@ def run_shap_analysis(
         0.98, 0.01,
         "Colour bar: feature value  (red = high, blue = low)",
         ha="right", va="bottom",
-        fontsize=14, color=PALETTE["muted"], fontfamily="monospace",
+        fontsize=18, color=PALETTE["muted"], fontfamily="monospace",
     )
 
     plt.savefig(str(output_path), dpi=150, bbox_inches="tight",
@@ -1055,11 +1055,11 @@ def _style_ax(ax: plt.Axes, title: str = "", grid_axis: str = "y") -> None:
     for sp in ax.spines.values():
         sp.set_edgecolor(PALETTE["border"])
         sp.set_linewidth(1.1)
-    ax.tick_params(colors=PALETTE["muted"], labelsize=8)
+    ax.tick_params(colors=PALETTE["muted"], labelsize=12)
     ax.xaxis.label.set_color(PALETTE["muted"])
     ax.yaxis.label.set_color(PALETTE["muted"])
     if title:
-        ax.set_title(title, color=PALETTE["text"], fontsize=12,
+        ax.set_title(title, color=PALETTE["text"], fontsize=16,
                      fontweight="bold", pad=7, fontfamily="monospace")
     if grid_axis:
         ax.grid(axis=grid_axis, color=PALETTE["gridl"], lw=0.9, alpha=0.9)
@@ -1117,7 +1117,7 @@ def make_dashboard(
     ax_t.text(
         0.5, 0.78, "TOM500  ·  THREE-ARM ML COMPARISON",
         ha="center", transform=ax_t.transAxes,
-        fontsize=26, fontweight="900",
+        fontsize=30, fontweight="900",
         color=PALETTE["text"], fontfamily="monospace",
     )
     ax_t.text(
@@ -1125,12 +1125,12 @@ def make_dashboard(
         "ARM A: Clinical features only   ·   ARM B: MRI imaging features   ·   "
         "ARM C: Clinical + MRI combined   |   Nested 5-outer / 3-inner CV",
         ha="center", transform=ax_t.transAxes,
-        fontsize=14, color=PALETTE["muted"], fontfamily="monospace",
+        fontsize=18, color=PALETTE["muted"], fontfamily="monospace",
     )
     for i, (lbl, col) in enumerate(zip(ARM_LABELS, ARM_COLORS)):
         ax_t.text(0.27 + i * 0.155, 0.02, f"■  {lbl}",
                   ha="center", transform=ax_t.transAxes,
-                  fontsize=12, color=col,
+                  fontsize=16, color=col,
                   fontfamily="monospace", fontweight="bold")
 
     x   = np.arange(nmod)
@@ -1155,23 +1155,23 @@ def make_dashboard(
         for b, v in zip(bars, vals):
             ax_a.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.013,
                       f"{v:.3f}", ha="center", va="bottom",
-                      fontsize=9.5, color=PALETTE["text"], fontweight="bold")
+                      fontsize=13.5, color=PALETTE["text"], fontweight="bold")
 
     ax_a.set_xticks(x)
-    ax_a.set_xticklabels(MODEL_NAMES, fontsize=14, color=PALETTE["text"])
+    ax_a.set_xticklabels(MODEL_NAMES, fontsize=18, color=PALETTE["text"])
     ax_a.set_ylim(0.38, 0.90)
     ax_a.set_ylabel("Mean AUC", color=PALETTE["muted"])
     ax_a.axhline(0.5, ls="--", lw=1.2, color=PALETTE["danger"],
                  alpha=0.5, label="Chance (0.5)")
     ax_a.legend(framealpha=0, labelcolor=PALETTE["text"],
-                fontsize=12.5, loc="upper left")
+                fontsize=16.5, loc="upper left")
 
     bi, bj = np.unravel_index(auc_m.argmax(), auc_m.shape)
     ax_a.annotate(
         f"BEST\n{auc_m[bi, bj]:.3f}",
         xy=(bj + off[bi], auc_m[bi, bj]),
         xytext=(bj + off[bi] + 0.38, auc_m[bi, bj] + 0.03),
-        fontsize=10.5, color=ARM_COLORS[bi], fontweight="bold",
+        fontsize=14.5, color=ARM_COLORS[bi], fontweight="bold",
         arrowprops=dict(arrowstyle="->", color=ARM_COLORS[bi], lw=1.4),
         fontfamily="monospace",
     )
@@ -1182,18 +1182,18 @@ def make_dashboard(
     im = ax_h.imshow(np.log1p(tim_m), aspect="auto",
                      cmap="YlOrRd", origin="upper")
     ax_h.set_xticks(range(nmod))
-    ax_h.set_xticklabels(MODEL_NAMES, fontsize=14, color=PALETTE["text"],
+    ax_h.set_xticklabels(MODEL_NAMES, fontsize=18, color=PALETTE["text"],
                           rotation=30, ha="right")
     ax_h.set_yticks(range(3))
-    ax_h.set_yticklabels(ARM_LABELS, fontsize=14, color=PALETTE["text"])
+    ax_h.set_yticklabels(ARM_LABELS, fontsize=18, color=PALETTE["text"])
     for r in range(3):
         for c in range(nmod):
             ax_h.text(c, r, f"{tim_m[r, c]:.1f}s",
                       ha="center", va="center",
-                      fontsize=12, color="black", fontweight="bold")
+                      fontsize=16, color="black", fontweight="bold")
     cb = fig.colorbar(im, ax=ax_h, fraction=0.04, pad=0.04)
-    cb.ax.tick_params(colors=PALETTE["muted"], labelsize=10)
-    cb.set_label("log(1+s)", color=PALETTE["muted"], fontsize=10.5)
+    cb.ax.tick_params(colors=PALETTE["muted"], labelsize=14)
+    cb.set_label("log(1+s)", color=PALETTE["muted"], fontsize=14.5)
 
     # ── (C) fold distributions ────────────────────────────────────────────────
     gs2   = GridSpecFromSubplotSpec(1, 2, subplot_spec=ogs[2],
@@ -1230,14 +1230,14 @@ def make_dashboard(
         ax_b.scatter(p2 + j, sc, color=col, s=28, zorder=5, alpha=0.88)
 
     ax_b.set_xticks(t_pos)
-    ax_b.set_xticklabels(t_lbl, fontsize=12, color=PALETTE["text"])
+    ax_b.set_xticklabels(t_lbl, fontsize=16, color=PALETTE["text"])
     ax_b.set_ylabel("AUC", color=PALETTE["muted"])
     ax_b.set_ylim(0.25, 1.05)
     ax_b.axhline(0.5, ls="--", lw=0.9, color=PALETTE["danger"], alpha=0.4)
     patches = [mpatches.Patch(color=c, label=l, alpha=0.8)
                for c, l in zip(ARM_COLORS, ARM_LABELS)]
     ax_b.legend(handles=patches, framealpha=0,
-                labelcolor=PALETTE["text"], fontsize=12, loc="upper left")
+                labelcolor=PALETTE["text"], fontsize=16, loc="upper left")
 
     # ── (D) stability bar ─────────────────────────────────────────────────────
     ax_s = fig.add_subplot(gs2[1])
@@ -1249,9 +1249,9 @@ def make_dashboard(
         for b, v in zip(bars2, stds):
             ax_s.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.001,
                       f"{v:.3f}", ha="center", va="bottom",
-                      fontsize=9.5, color=PALETTE["text"])
+                      fontsize=13.5, color=PALETTE["text"])
     ax_s.set_xticks(x)
-    ax_s.set_xticklabels(MODEL_NAMES, fontsize=14, color=PALETTE["text"])
+    ax_s.set_xticklabels(MODEL_NAMES, fontsize=18, color=PALETTE["text"])
     ax_s.set_ylabel("σ AUC", color=PALETTE["muted"])
 
     # ── (E) radar ─────────────────────────────────────────────────────────────
@@ -1260,16 +1260,16 @@ def make_dashboard(
     ax_r  = fig.add_subplot(gs3[0], polar=True)
     ax_r.set_facecolor(PALETTE["panel"])
     ax_r.spines["polar"].set_color(PALETTE["border"])
-    ax_r.tick_params(colors=PALETTE["muted"], labelsize=8)
+    ax_r.tick_params(colors=PALETTE["muted"], labelsize=12)
     ax_r.set_title("(E)  Best-Model Radar per Arm",
-                   color=PALETTE["text"], fontsize=12,
+                   color=PALETTE["text"], fontsize=16,
                    fontweight="bold", pad=16, fontfamily="monospace")
 
     cats   = ["Mean AUC", "Speed\n(inv-log t)", "Stability\n(inv-σ)"]
     NC     = len(cats)
     angles = [i / NC * 2 * np.pi for i in range(NC)] + [0]
     ax_r.set_xticks(angles[:-1])
-    ax_r.set_xticklabels(cats, color=PALETTE["text"], fontsize=12)
+    ax_r.set_xticklabels(cats, color=PALETTE["text"], fontsize=16)
     ax_r.set_ylim(0, 1)
     ax_r.yaxis.set_tick_params(labelleft=False)
     ax_r.set_yticks([0.25, 0.5, 0.75, 1.0])
@@ -1292,7 +1292,7 @@ def make_dashboard(
         ax_r.fill(angles, vals, color=col, alpha=0.13)
 
     ax_r.legend(loc="upper right", bbox_to_anchor=(1.65, 1.18),
-                framealpha=0, labelcolor=PALETTE["text"], fontsize=12)
+                framealpha=0, labelcolor=PALETTE["text"], fontsize=16)
 
     # ── (F) feature importance ────────────────────────────────────────────────
     ax_f = fig.add_subplot(gs3[1])
@@ -1303,17 +1303,17 @@ def make_dashboard(
     yp        = np.arange(len(fi_names))
     ax_f.barh(yp, fi_vals, color=fi_colors, alpha=0.85, edgecolor="none")
     ax_f.set_yticks(yp)
-    ax_f.set_yticklabels(fi_names, fontsize=12.5, color=PALETTE["text"])
+    ax_f.set_yticklabels(fi_names, fontsize=16.5, color=PALETTE["text"])
     ax_f.set_xlabel("MDI Importance", color=PALETTE["muted"])
 
     cp = mpatches.Patch(color=PALETTE["armA"], alpha=0.85, label="Clinical feature")
     ip = mpatches.Patch(color=PALETTE["armB"], alpha=0.85,
                         label="MRI feature  (shape / intensity / texture / asymmetry / ratio)")
     ax_f.legend(handles=[cp, ip], framealpha=0,
-                labelcolor=PALETTE["text"], fontsize=12, loc="lower right")
+                labelcolor=PALETTE["text"], fontsize=16, loc="lower right")
     ax_f.text(fi_vals[-1] + 0.0003, len(fi_names) - 1,
               f"{fi_vals[-1]:.4f}", va="center",
-              fontsize=11.5, color=PALETTE["text"])
+              fontsize=15.5, color=PALETTE["text"])
 
     plt.savefig(str(out), dpi=155, bbox_inches="tight",
                 facecolor=PALETTE["bg"])

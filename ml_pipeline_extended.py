@@ -232,10 +232,10 @@ def sax(ax, title="", ga="y"):
     ax.set_facecolor(P["panel"])
     for sp in ax.spines.values():
         sp.set_edgecolor(P["border"]); sp.set_linewidth(1.1)
-    ax.tick_params(colors=P["muted"], labelsize=8)
+    ax.tick_params(colors=P["muted"], labelsize=10)
     ax.xaxis.label.set_color(P["muted"]); ax.yaxis.label.set_color(P["muted"])
     if title:
-        ax.set_title(title, color=P["text"], fontsize=9,
+        ax.set_title(title, color=P["text"], fontsize=12,
                      fontweight="bold", pad=7, fontfamily="monospace")
     if ga:
         ax.grid(axis=ga, color=P["gridl"], lw=0.9, alpha=0.9)
@@ -262,7 +262,7 @@ def make_dashboard(res_A, res_B, res_C, X_comb, y, feat_comb,
     for sp in ax_t.spines.values(): sp.set_visible(False)
     ax_t.set_xticks([]); ax_t.set_yticks([])
     ax_t.text(0.5, 0.78, "THREE-ARM ML COMPARISON", ha="center",
-              transform=ax_t.transAxes, fontsize=28, fontweight="900",
+              transform=ax_t.transAxes, fontsize=32, fontweight="900",
               color=P["text"], fontfamily="monospace")
     ax_t.text(0.5, 0.22,
               "ARM A: Clinical only   ·   ARM B: MRI Imaging only   ·   "
@@ -272,7 +272,7 @@ def make_dashboard(res_A, res_B, res_C, X_comb, y, feat_comb,
               fontsize=10, color=P["muted"], fontfamily="monospace")
     for i, (lbl, col) in enumerate(zip(ARM_L, ARM_C)):
         ax_t.text(0.29 + i * 0.14, 0.02, f"■  {lbl}", ha="center",
-                  transform=ax_t.transAxes, fontsize=9.5, color=col,
+                  transform=ax_t.transAxes, fontsize=12.5, color=col,
                   fontfamily="monospace", fontweight="bold")
 
     x = np.arange(nmod); w = 0.24; off = [-w, 0, w]

@@ -1,0 +1,970 @@
+"""
+TOM500 Full ML Pipeline — High-Res PNG Print-Ready Version
+==========================================================
+Single entry-point that runs the complete workflow in four stages:
+
+  STAGE 1 — MRI Feature Extraction
+  STAGE 2 — Data Fusion
+  STAGE 3 — Three-Arm ML Comparison & Publication Dashboard (300 DPI PNGs)
+  STAGE 4 — SHAP Explainability (Print-Ready PNG)
+
+Outputs:
+  mri_features.csv               per-case MRI feature table (Stage 1)
+  merged_features.csv            clinical + MRI fused table (Stage 2)
+  results_summary.csv            AUC / time / σ per arm × model (Stage 3)
+  ml_combined_dashboard.png      Full high-res (300 DPI) comparison dashboard (Stage 3)
+  shap_summary.png               High-res SHAP summary plot (Stage 4)
+  shap_importance.csv            mean |SHAP| ranked features (Stage 4)
+  figure_panels/panel_A_mean_auc.png            Standalone Panel A PNG (300 DPI)
+  figure_panels/panel_B_training_time.png       Standalone Panel B PNG (300 DPI)
+  figure_panels/panel_C_auc_distributions.png   Standalone Panel C PNG (300 DPI)
+  figure_panels/panel_D_stability.png           Standalone Panel D PNG (300 DPI)
+  figure_panels/panel_E_radar.png               Standalone Panel E PNG (300 DPI)
+  figure_panels/panel_F_feature_importance.png  Standalone Panel F PNG (300 DPI)
+"""
+
+from __future__ import annotations
+
+import argparse
+import logging
+import sys
+import time
+import warnings
+from concurrent.futures import ProcessPoolExecutor, as_completed
+from multiprocessing import cpu_count
+from pathlib import Path
+from typing import Dict, List, Optional, Tuple
+
+warnings.filterwarnings("ignore")
+
+import nibabel as nib
+import numpy as np
+import pandas as pd
+from scipy import stats
+from skimage.feature import graycomatrix, graycoprops
+
+from sklearn.ensemble import GradientBoostingClassifier, RandomForestClassifier
+from sklearn.impute import SimpleImputer
+from sklearn.linear_model import LogisticRegression
+from sklearn.metrics import roc_auc_score
+from sklearn.model_selection import GridSearchCV, StratifiedKFold
+from sklearn.pipeline import Pipeline
+from sklearn.preprocessing import StandardScaler
+from sklearn.svm import SVC
+
+import matplotlib
+matplotlib.use("Agg")
+import matplotlib.pyplot as plt
+import matplotlib.patches as mpatches
+from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
+
+try:
+    from tqdm import tqdm as _tqdm
+    HAS_TQDM = True
+except ImportError:
+    HAS_TQDM = False
+
+try:
+    from tpot import TPOTClassifier
+    HAS_TPOT = True
+except ImportError:
+    HAS_TPOT = False
+
+try:
+    import shap
+    HAS_SHAP = True
+except ImportError:
+    HAS_SHAP = False
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# GLOBAL CONSTANTS & PRINT-READY PALETTE
+# ═════════════════════════════════════════════════════════════════════════════
+
+LABEL_MAP: Dict[int, str] = {
+    1: "eyeball",
+    2: "fat",
+    3: "optic_nerve",
+    4: "muscle",
+    5: "lacrimal_gland",
+    6: "superior_rectus",
+    7: "inferior_rectus",
+    8: "medial_rectus",
+    9: "lateral_rectus",
+}
+
+GLCM_DISTANCES = [1]
+GLCM_ANGLES    = [0, np.pi / 4, np.pi / 2, 3 * np.pi / 4]
+GLCM_LEVELS    = 64
+GLCM_PROPS     = ["contrast", "homogeneity", "energy", "correlation"]
+
+CLINICAL_FEATS = [
+    "Age", "Sex_enc", "SmokingIndex", "LogSmoke",
+    "DiseaseDuration", "IsSmoker",
+]
+
+ARM_LABELS  = ["Clinical", "MRI Imaging", "Combined"]
+MODEL_NAMES = ["LogReg", "RandForest", "GradBoost", "SVM-RBF", "AutoML"]
+
+PALETTE = dict(
+    bg     = "#FFFFFF",   # Clean white background for paper
+    panel  = "#F8F9FA",   # Light gray for subplot axes
+    border = "#B0B0B0",   # Solid gray borders
+    text   = "#000000",   # High-contrast black text
+    muted  = "#333333",   # Dark gray for axis labels
+    gridl  = "#E2E4E6",   # Light gridlines
+    armA   = "#1F77B4",   # Publication Blue (Clinical)
+    armB   = "#FF7F0E",   # Publication Orange (MRI)
+    armC   = "#2CA02C",   # Publication Green (Combined)
+    danger = "#D62728",   # Crimson for chance lines
+)
+ARM_COLORS = [PALETTE["armA"], PALETTE["armB"], PALETTE["armC"]]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# LOGGING
+# ═════════════════════════════════════════════════════════════════════════════
+
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s  %(levelname)-8s  %(message)s",
+    datefmt="%H:%M:%S",
+)
+log = logging.getLogger("tom500")
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STAGE 1 — MRI FEATURE EXTRACTION
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _load_nifti(path: Path) -> Tuple[np.ndarray, np.ndarray]:
+    img   = nib.load(str(path))
+    arr   = np.asarray(img.dataobj, dtype=np.float32)
+    zooms = np.abs(np.array(img.header.get_zooms()[:3], dtype=np.float64))
+    zooms = np.where(zooms == 0, 1.0, zooms)
+    return arr, zooms
+
+
+def _discover_cases(image_dir: Path, label_dir: Path) -> List[str]:
+    img_ids = {p.name.replace(".nii.gz", "") for p in image_dir.glob("*.nii.gz")}
+    lbl_ids = {p.name.replace(".nii.gz", "") for p in label_dir.glob("*.nii.gz")}
+    common = sorted(img_ids & lbl_ids, key=lambda x: int(x) if x.isdigit() else x)
+    log.info("Discovered %d paired cases.", len(common))
+    return common
+
+
+def extract_shape_features(mask: np.ndarray, label_id: int, voxel_spacing: np.ndarray) -> Dict[str, float]:
+    prefix        = f"{LABEL_MAP[label_id]}_shape"
+    roi           = mask == label_id
+    voxel_vol_mm3 = float(np.prod(voxel_spacing))
+    _nan_keys     = [
+        "volume_voxels", "volume_mm3", "bb_dx", "bb_dy", "bb_dz",
+        "bb_dx_mm", "bb_dy_mm", "bb_dz_mm", "ar_dx_dy", "ar_dx_dz", "ar_dy_dz",
+    ]
+
+    if not roi.any():
+        return {f"{prefix}_{k}": np.nan for k in _nan_keys}
+
+    idx         = np.argwhere(roi)
+    mn, mx      = idx.min(axis=0), idx.max(axis=0)
+    dx, dy, dz  = (mx - mn + 1).astype(float)
+    vol_vox     = float(roi.sum())
+
+    def _r(a: float, b: float) -> float:
+        return a / b if b != 0 else np.nan
+
+    return {
+        f"{prefix}_volume_voxels": vol_vox,
+        f"{prefix}_volume_mm3":    vol_vox * voxel_vol_mm3,
+        f"{prefix}_bb_dx":         dx,
+        f"{prefix}_bb_dy":         dy,
+        f"{prefix}_bb_dz":         dz,
+        f"{prefix}_bb_dx_mm":      dx * voxel_spacing[0],
+        f"{prefix}_bb_dy_mm":      dy * voxel_spacing[1],
+        f"{prefix}_bb_dz_mm":      dz * voxel_spacing[2],
+        f"{prefix}_ar_dx_dy":      _r(dx, dy),
+        f"{prefix}_ar_dx_dz":      _r(dx, dz),
+        f"{prefix}_ar_dy_dz":      _r(dy, dz),
+    }
+
+
+def extract_intensity_features(image: np.ndarray, mask: np.ndarray, label_id: int) -> Dict[str, float]:
+    prefix  = f"{LABEL_MAP[label_id]}_int"
+    voxels  = image[mask == label_id]
+    _nan    = {f"{prefix}_{k}": np.nan for k in ["mean", "std", "median", "p10", "p90", "skewness", "kurtosis"]}
+
+    if voxels.size < 2:
+        return _nan
+
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore")
+        return {
+            f"{prefix}_mean":     float(voxels.mean()),
+            f"{prefix}_std":      float(voxels.std()),
+            f"{prefix}_median":   float(np.median(voxels)),
+            f"{prefix}_p10":      float(np.percentile(voxels, 10)),
+            f"{prefix}_p90":      float(np.percentile(voxels, 90)),
+            f"{prefix}_skewness": float(stats.skew(voxels)),
+            f"{prefix}_kurtosis": float(stats.kurtosis(voxels)),
+        }
+
+
+def _rescale_uint8(patch: np.ndarray, levels: int = GLCM_LEVELS) -> np.ndarray:
+    lo, hi = patch.min(), patch.max()
+    if hi == lo:
+        return np.zeros_like(patch, dtype=np.uint8)
+    return ((patch - lo) / (hi - lo) * (levels - 1)).astype(np.uint8)
+
+
+def extract_texture_features(image: np.ndarray, mask: np.ndarray, label_id: int) -> Dict[str, float]:
+    prefix  = f"{LABEL_MAP[label_id]}_tex"
+    _nan    = {f"{prefix}_{p}": np.nan for p in GLCM_PROPS}
+    roi_3d  = mask == label_id
+
+    if not roi_3d.any():
+        return _nan
+
+    z_occ  = np.where(roi_3d.any(axis=(0, 1)))[0]
+    z_cent = int(np.median(z_occ))
+    roi_2d = roi_3d[:, :, z_cent]
+    if not roi_2d.any():
+        z_cent = z_occ[0]
+        roi_2d = roi_3d[:, :, z_cent]
+
+    img_2d = image[:, :, z_cent].copy()
+    img_2d[~roi_2d] = img_2d[roi_2d].min()
+
+    rows, cols = np.where(roi_2d)
+    patch = img_2d[rows.min():rows.max() + 1, cols.min():cols.max() + 1]
+
+    if patch.size < 4:
+        return _nan
+
+    try:
+        glcm = graycomatrix(
+            _rescale_uint8(patch, GLCM_LEVELS),
+            distances=GLCM_DISTANCES,
+            angles=GLCM_ANGLES,
+            levels=GLCM_LEVELS,
+            symmetric=True,
+            normed=True,
+        )
+        return {f"{prefix}_{p}": float(graycoprops(glcm, p).mean()) for p in GLCM_PROPS}
+    except Exception as exc:
+        log.debug("GLCM failed label %d: %s", label_id, exc)
+        return _nan
+
+
+def extract_asymmetry_features(mask: np.ndarray, label_id: int) -> Dict[str, float]:
+    prefix = f"{LABEL_MAP[label_id]}_asym"
+    roi    = mask == label_id
+    total  = int(roi.sum())
+    _nan   = {f"{prefix}_{k}": np.nan for k in ["left_voxels", "right_voxels", "asymmetry"]}
+
+    if total == 0:
+        return _nan
+
+    mid   = mask.shape[0] // 2
+    left  = int(roi[:mid].sum())
+    right = int(roi[mid:].sum())
+
+    return {
+        f"{prefix}_left_voxels":  float(left),
+        f"{prefix}_right_voxels": float(right),
+        f"{prefix}_asymmetry":    abs(left - right) / total,
+    }
+
+
+def extract_ratio_features(shape_feats: Dict[str, float]) -> Dict[str, float]:
+    def _vol(name: str) -> float:
+        return shape_feats.get(f"{name}_shape_volume_voxels", np.nan)
+
+    def _div(n: float, d: float) -> float:
+        return n / d if (not np.isnan(n) and not np.isnan(d) and d != 0) else np.nan
+
+    fat      = _vol("fat")
+    eyeball  = _vol("eyeball")
+    optic_n  = _vol("optic_nerve")
+    lacrimal = _vol("lacrimal_gland")
+    sr       = _vol("superior_rectus")
+    ir       = _vol("inferior_rectus")
+    mr       = _vol("medial_rectus")
+    lr       = _vol("lateral_rectus")
+    muscle   = _vol("muscle")
+
+    all_muscle_parts = [v for v in [muscle, sr, ir, mr, lr] if not np.isnan(v)]
+    all_muscle = float(sum(all_muscle_parts)) if all_muscle_parts else np.nan
+
+    return {
+        "ratio_fat_to_muscle":       _div(fat,       all_muscle),
+        "ratio_muscle_to_eyeball":   _div(all_muscle, eyeball),
+        "ratio_nerve_to_fat":        _div(optic_n,   fat),
+        "ratio_lacrimal_to_fat":     _div(lacrimal,  fat),
+        "ratio_sr_to_ir":            _div(sr,        ir),
+        "ratio_mr_to_lr":            _div(mr,        lr),
+        "ratio_eyeball_to_fat":      _div(eyeball,   fat),
+        "ratio_nerve_to_eyeball":    _div(optic_n,   eyeball),
+        "ratio_total_muscle_to_fat": _div(all_muscle, fat),
+    }
+
+
+def _extract_one_case(case_id: str, image_dir: Path, label_dir: Path) -> Optional[Dict]:
+    try:
+        image, voxel_spacing = _load_nifti(image_dir / f"{case_id}.nii.gz")
+        mask,  _             = _load_nifti(label_dir / f"{case_id}.nii.gz")
+        mask                 = mask.astype(np.int32)
+    except Exception as exc:
+        log.error("Case %s — NIfTI load failed: %s", case_id, exc)
+        return None
+
+    if image.shape != mask.shape:
+        return None
+
+    row: Dict       = {"case_id": case_id}
+    all_shape: Dict = {}
+
+    for lid in LABEL_MAP:
+        for fn, kwargs in [
+            (extract_shape_features,     dict(mask=mask, label_id=lid, voxel_spacing=voxel_spacing)),
+            (extract_intensity_features, dict(image=image, mask=mask, label_id=lid)),
+            (extract_texture_features,   dict(image=image, mask=mask, label_id=lid)),
+            (extract_asymmetry_features, dict(mask=mask, label_id=lid)),
+        ]:
+            try:
+                feats = fn(**kwargs)
+            except Exception:
+                feats = {}
+            row.update(feats)
+            if fn is extract_shape_features:
+                all_shape.update(feats)
+
+    try:
+        row.update(extract_ratio_features(all_shape))
+    except Exception:
+        pass
+
+    return row
+
+
+def build_features_dataset(
+    image_dir: str | Path,
+    label_dir: str | Path,
+    n_workers: int = 1,
+    out_csv:   Optional[str | Path] = "mri_features.csv",
+) -> pd.DataFrame:
+    image_dir, label_dir = Path(image_dir), Path(label_dir)
+    case_ids = _discover_cases(image_dir, label_dir)
+    if not case_ids:
+        return pd.DataFrame()
+
+    rows: List[Dict] = []
+    n_eff = min(n_workers, len(case_ids), cpu_count())
+
+    if n_eff > 1:
+        with ProcessPoolExecutor(max_workers=n_eff) as ex:
+            futs = {ex.submit(_extract_one_case, c, image_dir, label_dir): c for c in case_ids}
+            for fut in as_completed(futs):
+                r = fut.result()
+                if r is not None: rows.append(r)
+    else:
+        for cid in case_ids:
+            r = _extract_one_case(cid, image_dir, label_dir)
+            if r is not None: rows.append(r)
+
+    df = pd.DataFrame(rows)
+    try:
+        df["_k"] = df["case_id"].apply(lambda x: int(x) if str(x).isdigit() else x)
+        df = df.sort_values("_k").drop(columns=["_k"]).reset_index(drop=True)
+    except Exception:
+        pass
+
+    if out_csv:
+        df.to_csv(Path(out_csv), index=False)
+    return df
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STAGE 2 — DATA FUSION
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _engineer_clinical(df: pd.DataFrame) -> pd.DataFrame:
+    for col in ["Age", "SmokingIndex", "DiseaseDuration"]:
+        df[col] = pd.to_numeric(df[col], errors="coerce")
+    df["CAS_num"]  = pd.to_numeric(df["CAS"], errors="coerce")
+    df["Sex_enc"]  = (df["Sex"] == "M").astype(int)
+    df["IsSmoker"] = (df["SmokingIndex"].fillna(0) > 0).astype(int)
+    df["LogSmoke"] = np.log1p(df["SmokingIndex"].fillna(0))
+    return df
+
+
+def merge_with_clinical(
+    clinical_csv: str | Path,
+    mri_csv:      str | Path,
+    how:          str = "inner",
+    threshold:    int = 2,
+    out_csv:      Optional[str | Path] = "merged_features.csv",
+) -> pd.DataFrame:
+    clin = pd.read_csv(clinical_csv)
+    mri  = pd.read_csv(mri_csv)
+
+    if "Id" in clin.columns and "case_id" not in clin.columns:
+        clin["case_id"] = clin["Id"].apply(lambda x: str(x).split("_")[0])
+    clin["case_id"] = clin["case_id"].astype(str)
+    mri["case_id"]  = mri["case_id"].astype(str)
+
+    merged = pd.merge(clin, mri, on="case_id", how=how, suffixes=("_clin", "_mri"))
+    merged = _engineer_clinical(merged)
+    merged["target"] = (merged["CAS_num"] >= threshold).astype(int)
+
+    if out_csv:
+        merged.to_csv(Path(out_csv), index=False)
+    return merged
+
+
+def prepare_arm_arrays(merged: pd.DataFrame, mri_feature_cols: List[str]):
+    clin_cols = [c for c in CLINICAL_FEATS if c in merged.columns]
+    mri_cols  = [c for c in mri_feature_cols if c in merged.columns]
+    comb_cols = clin_cols + mri_cols
+
+    imp = SimpleImputer(strategy="median")
+    X_clin = imp.fit_transform(merged[clin_cols].values)
+    X_mri  = imp.fit_transform(merged[mri_cols].values)
+    X_comb = imp.fit_transform(merged[comb_cols].values)
+    y      = merged["target"].values
+
+    return X_clin, X_mri, X_comb, y, clin_cols, mri_cols, comb_cols
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STAGE 3 — ML MODELS & NESTED CV
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _build_pipelines() -> Dict[str, Tuple[Pipeline, Dict]]:
+    base = [("imp", SimpleImputer(strategy="median")), ("scl", StandardScaler())]
+    return {
+        "LogReg": (
+            Pipeline(base + [("clf", LogisticRegression(max_iter=500, class_weight="balanced", random_state=42))]),
+            {"clf__C": [0.01, 0.1, 1, 10]},
+        ),
+        "RandForest": (
+            Pipeline([("imp", SimpleImputer()), ("clf", RandomForestClassifier(n_estimators=100, class_weight="balanced", random_state=42, n_jobs=1))]),
+            {"clf__n_estimators": [50, 100], "clf__max_depth": [None, 5]},
+        ),
+        "GradBoost": (
+            Pipeline([("imp", SimpleImputer()), ("clf", GradientBoostingClassifier(n_estimators=80, learning_rate=0.1, max_depth=3, random_state=42))]),
+            {"clf__learning_rate": [0.05, 0.1]},
+        ),
+        "SVM-RBF": (
+            Pipeline(base + [("clf", SVC(kernel="rbf", probability=True, class_weight="balanced", random_state=42))]),
+            {"clf__C": [0.1, 1, 10], "clf__gamma": ["scale"]},
+        ),
+    }
+
+
+def _nested_cv(pipe: Pipeline, X: np.ndarray, y: np.ndarray, name: str, param_grid: Optional[Dict] = None, outer: int = 5, inner: int = 3) -> Dict:
+    outer_cv = StratifiedKFold(outer, shuffle=True, random_state=42)
+    aucs, t0 = [], time.time()
+
+    for tr, te in outer_cv.split(X, y):
+        if param_grid:
+            gs = GridSearchCV(pipe, param_grid, cv=StratifiedKFold(inner, shuffle=True, random_state=42), scoring="roc_auc", n_jobs=1)
+            gs.fit(X[tr], y[tr])
+            best = gs.best_estimator_
+        else:
+            pipe.fit(X[tr], y[tr])
+            best = pipe
+        aucs.append(roc_auc_score(y[te], best.predict_proba(X[te])[:, 1]))
+
+    return dict(
+        model           = name,
+        auc_scores      = aucs,
+        mean_auc        = float(np.mean(aucs)),
+        std_auc         = float(np.std(aucs)),
+        training_time_s = float(time.time() - t0),
+    )
+
+
+def _run_automl(X: np.ndarray, y: np.ndarray, models: Dict, cv: int = 5) -> Dict:
+    outer_cv   = StratifiedKFold(cv, shuffle=True, random_state=42)
+    aucs, t0   = [], time.time()
+    label      = "AutoML-TPOT" if HAS_TPOT else "AutoML"
+
+    for tr, te in outer_cv.split(X, y):
+        if HAS_TPOT:
+            clf = TPOTClassifier(generations=3, population_size=10, cv=3, scoring="roc_auc", random_state=42, verbosity=0, n_jobs=-1)
+            clf.fit(X[tr], y[tr])
+            prob = clf.predict_proba(X[te])[:, 1]
+        else:
+            best_a, prob = -1.0, None
+            icv = StratifiedKFold(3, shuffle=True, random_state=42)
+            for _, (pipe, pg) in models.items():
+                gs = GridSearchCV(pipe, pg, cv=icv, scoring="roc_auc", n_jobs=1)
+                gs.fit(X[tr], y[tr])
+                p = gs.best_estimator_.predict_proba(X[te])[:, 1]
+                a = roc_auc_score(y[te], p)
+                if a > best_a: best_a, prob = a, p
+        aucs.append(roc_auc_score(y[te], prob))
+
+    return dict(
+        model           = label,
+        auc_scores      = aucs,
+        mean_auc        = float(np.mean(aucs)),
+        std_auc         = float(np.std(aucs)),
+        training_time_s = float(time.time() - t0),
+    )
+
+
+def run_arm(X: np.ndarray, y: np.ndarray, label: str) -> List[Dict]:
+    models = _build_pipelines()
+    results = []
+    for name, (pipe, pg) in models.items():
+        r = _nested_cv(pipe, X, y, name, param_grid=pg)
+        results.append(r)
+    r = _run_automl(X, y, models)
+    results.append(r)
+    return results
+
+
+def compute_feature_importance(X: np.ndarray, y: np.ndarray, feat_names: List[str], top_n: int = 20) -> Tuple[List[str], np.ndarray]:
+    rf = Pipeline([("imp", SimpleImputer(strategy="median")), ("clf", RandomForestClassifier(n_estimators=300, class_weight="balanced", random_state=42, n_jobs=-1))])
+    rf.fit(X, y)
+    mdi = rf.named_steps["clf"].feature_importances_
+    idx = np.argsort(mdi)[-top_n:]
+    return [feat_names[i] for i in idx], mdi[idx]
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STAGE 3d — DASHBOARD & INDIVIDUAL STANDALONE PNG EXPORT
+# ═════════════════════════════════════════════════════════════════════════════
+
+def _style_ax(ax: plt.Axes, title: str = "", grid_axis: str = "y") -> None:
+    ax.set_facecolor(PALETTE["panel"])
+    for sp in ax.spines.values():
+        sp.set_edgecolor(PALETTE["border"])
+        sp.set_linewidth(1.2)
+    ax.tick_params(colors=PALETTE["text"], labelsize=12)
+    ax.xaxis.label.set_color(PALETTE["muted"])
+    ax.yaxis.label.set_color(PALETTE["muted"])
+    ax.xaxis.label.set_size(13)
+    ax.yaxis.label.set_size(13)
+    if title:
+        ax.set_title(title, color=PALETTE["text"], fontsize=15,
+                     fontweight="bold", pad=10, fontfamily="sans-serif")
+    if grid_axis:
+        ax.grid(axis=grid_axis, color=PALETTE["gridl"], lw=0.9, alpha=0.9)
+        ax.set_axisbelow(True)
+
+
+def _feat_color(name: str, clin_set: set) -> str:
+    return PALETTE["armA"] if name in clin_set else PALETTE["armB"]
+
+
+def make_dashboard(
+    res_A:      List[Dict],
+    res_B:      List[Dict],
+    res_C:      List[Dict],
+    X_comb:     np.ndarray,
+    y:          np.ndarray,
+    feat_comb:  List[str],
+    feat_clin:  List[str],
+    out:        str | Path = "ml_combined_dashboard.png",
+) -> str:
+    arms   = [res_A, res_B, res_C]
+    nmod   = len(MODEL_NAMES)
+    auc_m  = np.array([[r["mean_auc"] for r in a] for a in arms])
+    std_m  = np.array([[r["std_auc"]  for r in a] for a in arms])
+    tim_m  = np.array([[r["training_time_s"] for r in a] for a in arms])
+
+    fi_names, fi_vals = compute_feature_importance(X_comb, y, feat_comb)
+    clin_set = set(feat_clin)
+
+    # Helper function to save individual panel PNGs (300 DPI)
+    def _save_standalone_png(fig_sub, name):
+        out_dir = Path("figure_panels")
+        out_dir.mkdir(exist_ok=True)
+        file_path = out_dir / f"panel_{name}.png"
+        fig_sub.savefig(file_path, dpi=300, bbox_inches="tight", facecolor=PALETTE["bg"])
+        plt.close(fig_sub)
+        log.info("Saved standalone panel PNG → %s", file_path)
+
+    # ── 1. Full Dashboard PNG ────────────────────────────────────────────────
+    fig = plt.figure(figsize=(24, 20), facecolor=PALETTE["bg"])
+    ogs = GridSpec(4, 1, figure=fig, hspace=0.52, top=0.94, bottom=0.04,
+                   left=0.07, right=0.95, height_ratios=[0.05, 1, 1, 1])
+
+    ax_t = fig.add_subplot(ogs[0])
+    ax_t.set_facecolor(PALETTE["bg"])
+    for sp in ax_t.spines.values(): sp.set_visible(False)
+    ax_t.set_xticks([]); ax_t.set_yticks([])
+    ax_t.text(0.5, 0.75, "TOM500 · THREE-ARM ML COMPARISON",
+              ha="center", transform=ax_t.transAxes,
+              fontsize=24, fontweight="bold", color=PALETTE["text"])
+    ax_t.text(0.5, 0.15,
+              "ARM A: Clinical features   ·   ARM B: MRI features   ·   "
+              "ARM C: Combined   |   Nested 5-outer / 3-inner CV",
+              ha="center", transform=ax_t.transAxes,
+              fontsize=13, color=PALETTE["muted"])
+
+    x   = np.arange(nmod)
+    w   = 0.24
+    off = [-w, 0, w]
+
+    # (A) Grouped AUC bar
+    gs1  = GridSpecFromSubplotSpec(1, 2, subplot_spec=ogs[1], wspace=0.25, width_ratios=[3, 2])
+    ax_a = fig.add_subplot(gs1[0])
+    _style_ax(ax_a, "(A)  Mean AUC by Model & Arm")
+    for ai, (arm, col, lbl) in enumerate(zip(arms, ARM_COLORS, ARM_LABELS)):
+        vals, errs = [r["mean_auc"] for r in arm], [r["std_auc"] for r in arm]
+        bars = ax_a.bar(x + off[ai], vals, w * 0.9, color=col, alpha=0.9, yerr=errs, capsize=4,
+                        error_kw=dict(ecolor="#333333", elinewidth=1.4, capthick=1.4), label=lbl)
+        for b, v in zip(bars, vals):
+            ax_a.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.012, f"{v:.3f}",
+                      ha="center", va="bottom", fontsize=12, color=PALETTE["text"], fontweight="bold")
+    ax_a.set_xticks(x); ax_a.set_xticklabels(MODEL_NAMES, fontsize=13, color=PALETTE["text"], fontweight="bold")
+    ax_a.set_ylim(0.38, 0.93); ax_a.set_ylabel("Mean AUC", color=PALETTE["muted"], fontsize=13)
+    ax_a.axhline(0.5, ls="--", lw=1.4, color=PALETTE["danger"], alpha=0.7, label="Chance (0.5)")
+    ax_a.legend(framealpha=0.9, facecolor=PALETTE["bg"], labelcolor=PALETTE["text"], fontsize=12, loc="upper left")
+
+    # (B) Heatmap
+    ax_h = fig.add_subplot(gs1[1])
+    _style_ax(ax_h, "(B)  Training Time (seconds)", grid_axis=None)
+    im = ax_h.imshow(np.log1p(tim_m), aspect="auto", cmap="YlOrRd", origin="upper")
+    ax_h.set_xticks(range(nmod)); ax_h.set_xticklabels(MODEL_NAMES, fontsize=12, color=PALETTE["text"], rotation=25, ha="right", fontweight="bold")
+    ax_h.set_yticks(range(3)); ax_h.set_yticklabels(ARM_LABELS, fontsize=12, color=PALETTE["text"], fontweight="bold")
+    for r in range(3):
+        for c in range(nmod):
+            ax_h.text(c, r, f"{tim_m[r, c]:.1f}s", ha="center", va="center", fontsize=13, color="black", fontweight="bold")
+
+    # (C) Boxplot
+    gs2  = GridSpecFromSubplotSpec(1, 2, subplot_spec=ogs[2], wspace=0.25, width_ratios=[3, 2])
+    ax_b = fig.add_subplot(gs2[0])
+    _style_ax(ax_b, "(C)  Fold AUC Distributions")
+    rng2 = np.random.default_rng(1)
+    pos, dat, bcols = [], [], []
+    t_pos, t_lbl    = [], []
+    cur = 1.0; gap = 0.35
+    for mi, mn in enumerate(MODEL_NAMES):
+        t_pos.append(cur + w); t_lbl.append(mn)
+        for arm, col in zip(arms, ARM_COLORS):
+            pos.append(cur); dat.append(arm[mi]["auc_scores"]); bcols.append(col)
+            cur += w + 0.03
+        cur += gap
+    bp = ax_b.boxplot(dat, positions=pos, widths=w * 0.82, patch_artist=True,
+                      medianprops=dict(color=PALETTE["text"], lw=2.2),
+                      whiskerprops=dict(color=PALETTE["muted"], lw=1.2),
+                      capprops=dict(color=PALETTE["muted"], lw=1.2),
+                      flierprops=dict(marker=".", color=PALETTE["muted"], ms=4))
+    for patch, col in zip(bp["boxes"], bcols):
+        patch.set_facecolor(col); patch.set_alpha(0.65); patch.set_edgecolor(col)
+    for p2, sc, col in zip(pos, dat, bcols):
+        j = rng2.uniform(-w * 0.28, w * 0.28, len(sc))
+        ax_b.scatter(p2 + j, sc, color=col, s=32, zorder=5, alpha=0.9)
+    ax_b.set_xticks(t_pos); ax_b.set_xticklabels(t_lbl, fontsize=13, color=PALETTE["text"], fontweight="bold")
+    ax_b.set_ylabel("AUC", color=PALETTE["muted"], fontsize=13); ax_b.set_ylim(0.25, 1.05)
+    ax_b.axhline(0.5, ls="--", lw=1.2, color=PALETTE["danger"], alpha=0.5)
+
+    # (D) Stability
+    ax_s = fig.add_subplot(gs2[1])
+    _style_ax(ax_s, "(D)  Stability (Standard Deviation AUC)")
+    for ai, (arm, col, lbl) in enumerate(zip(arms, ARM_COLORS, ARM_LABELS)):
+        stds  = [r["std_auc"] for r in arm]
+        bars2 = ax_s.bar(x + off[ai], stds, w * 0.9, color=col, alpha=0.9, label=lbl)
+        for b, v in zip(bars2, stds):
+            ax_s.text(b.get_x() + b.get_width() / 2, b.get_height() + 0.001, f"{v:.3f}", ha="center", va="bottom", fontsize=11, color=PALETTE["text"])
+    ax_s.set_xticks(x); ax_s.set_xticklabels(MODEL_NAMES, fontsize=13, color=PALETTE["text"], fontweight="bold")
+    ax_s.set_ylabel("σ AUC", color=PALETTE["muted"], fontsize=13)
+
+    # (E) Radar
+    gs3  = GridSpecFromSubplotSpec(1, 2, subplot_spec=ogs[3], wspace=0.25, width_ratios=[1.6, 2.4])
+    ax_r = fig.add_subplot(gs3[0], polar=True)
+    ax_r.set_facecolor(PALETTE["panel"]); ax_r.spines["polar"].set_color(PALETTE["border"])
+    ax_r.tick_params(colors=PALETTE["text"], labelsize=12)
+    ax_r.set_title("(E)  Best-Model Radar per Arm", color=PALETTE["text"], fontsize=15, fontweight="bold", pad=16)
+    cats   = ["Mean AUC", "Speed\n(inv-log t)", "Stability\n(inv-σ)"]
+    NC     = len(cats); angles = [i / NC * 2 * np.pi for i in range(NC)] + [0]
+    ax_r.set_xticks(angles[:-1]); ax_r.set_xticklabels(cats, color=PALETTE["text"], fontsize=12, fontweight="bold")
+    ax_r.set_ylim(0, 1); ax_r.yaxis.set_tick_params(labelleft=False); ax_r.set_yticks([0.25, 0.5, 0.75, 1.0])
+    ax_r.yaxis.grid(color=PALETTE["border"], lw=0.9); ax_r.xaxis.grid(color=PALETTE["border"], lw=0.9)
+    all_t, all_sig = tim_m.flatten(), std_m.flatten()
+    for ai, (arm, col, lbl) in enumerate(zip(arms, ARM_COLORS, ARM_LABELS)):
+        bi2 = int(np.argmax([r["mean_auc"] for r in arm])); br = arm[bi2]
+        na  = np.clip((br["mean_auc"] - 0.5) / 0.5, 0, 1)
+        ns  = 1 - (np.log1p(br["training_time_s"]) - np.log1p(all_t.min())) / (np.log1p(all_t.max()) - np.log1p(all_t.min()) + 1e-9)
+        nst = 1 - (br["std_auc"] - all_sig.min()) / (all_sig.max() - all_sig.min() + 1e-9)
+        vals = [na, ns, nst, na]
+        ax_r.plot(angles, vals, color=col, lw=2.8, label=f"{lbl} [{MODEL_NAMES[bi2]} {br['mean_auc']:.3f}]")
+        ax_r.fill(angles, vals, color=col, alpha=0.15)
+    ax_r.legend(loc="upper right", bbox_to_anchor=(1.60, 1.18), framealpha=0.9, facecolor=PALETTE["bg"], labelcolor=PALETTE["text"], fontsize=12)
+
+    # (F) Feature Importances
+    ax_f = fig.add_subplot(gs3[1])
+    _style_ax(ax_f, "(F)  Top-20 Feature Importances (Combined Arm · RF MDI)", grid_axis="x")
+    fi_colors = [_feat_color(n, clin_set) for n in fi_names]
+    yp        = np.arange(len(fi_names))
+    ax_f.barh(yp, fi_vals, color=fi_colors, alpha=0.9, edgecolor="none")
+    ax_f.set_yticks(yp); ax_f.set_yticklabels(fi_names, fontsize=12, color=PALETTE["text"])
+    ax_f.set_xlabel("MDI Importance", color=PALETTE["muted"], fontsize=13)
+    cp = mpatches.Patch(color=PALETTE["armA"], alpha=0.9, label="Clinical feature")
+    ip = mpatches.Patch(color=PALETTE["armB"], alpha=0.9, label="MRI feature")
+    ax_f.legend(handles=[cp, ip], framealpha=0.9, facecolor=PALETTE["bg"], labelcolor=PALETTE["text"], fontsize=12, loc="lower right")
+
+    # Save full dashboard PNG (300 DPI)
+    out_path = Path(out)
+    plt.savefig(str(out_path), dpi=300, bbox_inches="tight", facecolor=PALETTE["bg"])
+    plt.close(fig)
+    log.info("Full Dashboard PNG saved → %s (300 DPI)", out_path)
+
+    # ── 2. Standalone Individual Panel PNGs (300 DPI) ────────────────────────
+    # Panel A
+    fig_a, ax_a_s = plt.subplots(figsize=(10, 6), facecolor=PALETTE["bg"])
+    _style_ax(ax_a_s, "Mean AUC by Model & Arm")
+    for ai, (arm, col, lbl) in enumerate(zip(arms, ARM_COLORS, ARM_LABELS)):
+        vals, errs = [r["mean_auc"] for r in arm], [r["std_auc"] for r in arm]
+        bars = ax_a_s.bar(x + off[ai], vals, w * 0.9, color=col, alpha=0.9, yerr=errs, capsize=4, label=lbl)
+        for b, v in zip(bars, vals):
+            ax_a_s.text(b.get_x() + b.get_width()/2, b.get_height() + 0.012, f"{v:.3f}", ha="center", va="bottom", fontsize=11, fontweight="bold")
+    ax_a_s.set_xticks(x); ax_a_s.set_xticklabels(MODEL_NAMES, fontsize=12, fontweight="bold")
+    ax_a_s.set_ylim(0.38, 0.93); ax_a_s.set_ylabel("Mean AUC", fontsize=12)
+    ax_a_s.axhline(0.5, ls="--", lw=1.2, color=PALETTE["danger"], alpha=0.7)
+    ax_a_s.legend(framealpha=0.9, fontsize=11, loc="upper left")
+    _save_standalone_png(fig_a, "A_mean_auc")
+
+    # Panel B
+    fig_b, ax_b_s = plt.subplots(figsize=(8, 6), facecolor=PALETTE["bg"])
+    _style_ax(ax_b_s, "Training Time (seconds)", grid_axis=None)
+    ax_b_s.imshow(np.log1p(tim_m), aspect="auto", cmap="YlOrRd", origin="upper")
+    ax_b_s.set_xticks(range(nmod)); ax_b_s.set_xticklabels(MODEL_NAMES, fontsize=12, rotation=25, ha="right", fontweight="bold")
+    ax_b_s.set_yticks(range(3)); ax_b_s.set_yticklabels(ARM_LABELS, fontsize=12, fontweight="bold")
+    for r in range(3):
+        for c in range(nmod):
+            ax_b_s.text(c, r, f"{tim_m[r, c]:.1f}s", ha="center", va="center", fontsize=13, fontweight="bold")
+    _save_standalone_png(fig_b, "B_training_time")
+
+    # Panel C
+    fig_c, ax_c_s = plt.subplots(figsize=(11, 6), facecolor=PALETTE["bg"])
+    _style_ax(ax_c_s, "Fold AUC Distributions")
+    bp = ax_c_s.boxplot(dat, positions=pos, widths=w * 0.82, patch_artist=True, medianprops=dict(color=PALETTE["text"], lw=2.2))
+    for patch, col in zip(bp["boxes"], bcols):
+        patch.set_facecolor(col); patch.set_alpha(0.65); patch.set_edgecolor(col)
+    for p2, sc, col in zip(pos, dat, bcols):
+        j = rng2.uniform(-w * 0.28, w * 0.28, len(sc))
+        ax_c_s.scatter(p2 + j, sc, color=col, s=32, zorder=5, alpha=0.9)
+    ax_c_s.set_xticks(t_pos); ax_c_s.set_xticklabels(t_lbl, fontsize=12, fontweight="bold")
+    ax_c_s.set_ylabel("AUC", fontsize=12); ax_c_s.set_ylim(0.25, 1.05)
+    _save_standalone_png(fig_c, "C_auc_distributions")
+
+    # Panel D
+    fig_d, ax_d_s = plt.subplots(figsize=(8, 6), facecolor=PALETTE["bg"])
+    _style_ax(ax_d_s, "Stability (Standard Deviation AUC)")
+    for ai, (arm, col, lbl) in enumerate(zip(arms, ARM_COLORS, ARM_LABELS)):
+        stds = [r["std_auc"] for r in arm]
+        bars2 = ax_d_s.bar(x + off[ai], stds, w * 0.9, color=col, alpha=0.9, label=lbl)
+        for b, v in zip(bars2, stds):
+            ax_d_s.text(b.get_x() + b.get_width()/2, b.get_height() + 0.001, f"{v:.3f}", ha="center", va="bottom", fontsize=11)
+    ax_d_s.set_xticks(x); ax_d_s.set_xticklabels(MODEL_NAMES, fontsize=12, fontweight="bold")
+    ax_d_s.set_ylabel("σ AUC", fontsize=12)
+    _save_standalone_png(fig_d, "D_stability")
+
+    # Panel E
+    fig_e = plt.figure(figsize=(7, 7), facecolor=PALETTE["bg"])
+    ax_e_s = fig_e.add_subplot(111, polar=True)
+    ax_e_s.set_facecolor(PALETTE["panel"]); ax_e_s.spines["polar"].set_color(PALETTE["border"])
+    ax_e_s.set_title("Best-Model Radar per Arm", fontsize=14, fontweight="bold", pad=16)
+    ax_e_s.set_xticks(angles[:-1]); ax_e_s.set_xticklabels(cats, fontsize=11, fontweight="bold")
+    for ai, (arm, col, lbl) in enumerate(zip(arms, ARM_COLORS, ARM_LABELS)):
+        bi2 = int(np.argmax([r["mean_auc"] for r in arm])); br = arm[bi2]
+        na = np.clip((br["mean_auc"] - 0.5) / 0.5, 0, 1)
+        ns = 1 - (np.log1p(br["training_time_s"]) - np.log1p(all_t.min())) / (np.log1p(all_t.max()) - np.log1p(all_t.min()) + 1e-9)
+        nst = 1 - (br["std_auc"] - all_sig.min()) / (all_sig.max() - all_sig.min() + 1e-9)
+        ax_e_s.plot(angles, [na, ns, nst, na], color=col, lw=2.8, label=f"{lbl} [{MODEL_NAMES[bi2]}]")
+        ax_e_s.fill(angles, [na, ns, nst, na], color=col, alpha=0.15)
+    ax_e_s.legend(loc="lower right", bbox_to_anchor=(1.25, -0.05), fontsize=10)
+    _save_standalone_png(fig_e, "E_radar")
+
+    # Panel F
+    fig_f, ax_f_s = plt.subplots(figsize=(10, 8), facecolor=PALETTE["bg"])
+    _style_ax(ax_f_s, "Top-20 Feature Importances (Combined Arm · RF MDI)", grid_axis="x")
+    ax_f_s.barh(yp, fi_vals, color=fi_colors, alpha=0.9, edgecolor="none")
+    ax_f_s.set_yticks(yp); ax_f_s.set_yticklabels(fi_names, fontsize=12, color=PALETTE["text"])
+    ax_f_s.set_xlabel("MDI Importance", fontsize=12)
+    ax_f_s.legend(handles=[cp, ip], framealpha=0.9, fontsize=11, loc="lower right")
+    _save_standalone_png(fig_f, "F_feature_importance")
+
+    return str(out_path)
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STAGE 4 — PRINT-READY SHAP ANALYSIS (300 DPI PNG)
+# ═════════════════════════════════════════════════════════════════════════════
+
+def run_shap_analysis(
+    X:              np.ndarray,
+    y:              np.ndarray,
+    feature_names:  List[str],
+    output_path:    str | Path = "shap_summary.png",
+    importance_csv: str | Path = "shap_importance.csv",
+    top_n_console:  int = 10,
+) -> Optional[pd.DataFrame]:
+    if not HAS_SHAP:
+        log.warning("Skipping SHAP analysis — shap package not available.")
+        return None
+
+    rf = Pipeline([("imp", SimpleImputer(strategy="median")), ("clf", RandomForestClassifier(n_estimators=300, class_weight="balanced", random_state=42, n_jobs=-1))])
+    rf.fit(X, y)
+
+    imp_X  = rf.named_steps["imp"].transform(X)
+    rf_clf = rf.named_steps["clf"]
+
+    explainer   = shap.TreeExplainer(rf_clf)
+    shap_values = explainer.shap_values(imp_X)
+    sv1         = shap_values[1] if isinstance(shap_values, list) else (shap_values[:, :, 1] if shap_values.ndim == 3 else shap_values)
+
+    plt.rcdefaults()
+    plt.rcParams.update({
+        "font.size":        12,
+        "text.color":       PALETTE["text"],
+        "axes.labelcolor":  PALETTE["text"],
+        "xtick.color":      PALETTE["text"],
+        "ytick.color":      PALETTE["text"],
+        "axes.facecolor":   PALETTE["panel"],
+        "figure.facecolor": PALETTE["bg"],
+    })
+
+    n_display = min(20, len(feature_names))
+    plt.figure(figsize=(11, 8), facecolor=PALETTE["bg"])
+
+    shap.summary_plot(
+        sv1, imp_X,
+        feature_names = feature_names,
+        show          = False,
+        plot_size     = None,
+        color_bar     = True,
+        max_display   = n_display,
+    )
+
+    ax = plt.gca()
+    ax.set_facecolor(PALETTE["panel"])
+    ax.tick_params(colors=PALETTE["text"], labelsize=11)
+    ax.set_xlabel("SHAP value (impact on model output — predicting CAS ≥ 2)", color=PALETTE["text"], fontsize=12)
+    ax.grid(axis="x", color=PALETTE["gridl"], lw=0.9, alpha=0.9)
+
+    plt.title("SHAP Summary · Feature Importance (CAS ≥ 2)", color=PALETTE["text"], fontsize=14, fontweight="bold", pad=14)
+
+    out_p = Path(output_path)
+    plt.savefig(str(out_p), dpi=300, bbox_inches="tight", facecolor=PALETTE["bg"])
+    plt.close()
+    plt.rcdefaults()
+
+    importance = np.abs(sv1).mean(axis=0)
+    df_imp = pd.DataFrame({"feature": feature_names, "mean_abs_shap": importance}).sort_values("mean_abs_shap", ascending=False).reset_index(drop=True)
+    df_imp.to_csv(str(importance_csv), index=False)
+
+    return df_imp
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# STAGE 3c — SAVE RESULTS CSV
+# ═════════════════════════════════════════════════════════════════════════════
+
+def save_results_csv(res_A: List[Dict], res_B: List[Dict], res_C: List[Dict], path: str | Path = "results_summary.csv") -> pd.DataFrame:
+    rows = []
+    for arm_lbl, arm_res in zip(ARM_LABELS, [res_A, res_B, res_C]):
+        for r in arm_res:
+            rows.append({
+                "arm":      arm_lbl,
+                "model":    r["model"],
+                "mean_auc": round(r["mean_auc"], 4),
+                "std_auc":  round(r["std_auc"],  4),
+                "time_s":   round(r["training_time_s"], 2),
+                **{f"fold_{i+1}": round(v, 4) for i, v in enumerate(r["auc_scores"])},
+            })
+    df = pd.DataFrame(rows)
+    df.to_csv(path, index=False)
+    return df
+
+
+# ═════════════════════════════════════════════════════════════════════════════
+# MAIN ORCHESTRATOR
+# ═════════════════════════════════════════════════════════════════════════════
+
+def run_pipeline(
+    image_dir:       str | Path,
+    label_dir:       str | Path,
+    clinical_csv:    str | Path,
+    mri_csv:         str | Path = "mri_features.csv",
+    merged_csv:      str | Path = "merged_features.csv",
+    results_csv:     str | Path = "results_summary.csv",
+    dashboard_path:  str | Path = "ml_combined_dashboard.png",
+    shap_plot:       str | Path = "shap_summary.png",
+    shap_csv:        str | Path = "shap_importance.csv",
+    n_workers:       int = 1,
+    skip_extraction: bool = False,
+    merge_how:       str = "inner",
+    cas_threshold:   int = 2,
+) -> Dict:
+    mri_csv = Path(mri_csv)
+
+    if skip_extraction and mri_csv.exists():
+        df_mri = pd.read_csv(mri_csv)
+    else:
+        df_mri = build_features_dataset(image_dir=image_dir, label_dir=label_dir, n_workers=n_workers, out_csv=mri_csv)
+
+    mri_feature_cols = [c for c in df_mri.columns if c != "case_id"]
+
+    df_merged = merge_with_clinical(clinical_csv=clinical_csv, mri_csv=mri_csv, how=merge_how, threshold=cas_threshold, out_csv=merged_csv)
+
+    X_clin, X_mri, X_comb, y, feat_clin, feat_mri, feat_comb = prepare_arm_arrays(df_merged, mri_feature_cols)
+
+    res_A = run_arm(X_clin, y, ARM_LABELS[0])
+    res_B = run_arm(X_mri,  y, ARM_LABELS[1])
+    res_C = run_arm(X_comb, y, ARM_LABELS[2])
+
+    save_results_csv(res_A, res_B, res_C, results_csv)
+    make_dashboard(res_A, res_B, res_C, X_comb, y, feat_comb, feat_clin, out=dashboard_path)
+
+    df_shap = run_shap_analysis(X=X_comb, y=y, feature_names=feat_comb, output_path=shap_plot, importance_csv=shap_csv)
+
+    return dict(df_mri=df_mri, df_merged=df_merged, res_A=res_A, res_B=res_B, res_C=res_C, df_shap=df_shap)
+
+
+def _build_parser() -> argparse.ArgumentParser:
+    p = argparse.ArgumentParser(description="TOM500 full ML pipeline (Print-Ready PNG Only)", formatter_class=argparse.ArgumentDefaultsHelpFormatter)
+    p.add_argument("--image-dir",  required=True)
+    p.add_argument("--label-dir",  required=True)
+    p.add_argument("--clinical",   required=True)
+    p.add_argument("--mri-csv",    default="mri_features.csv")
+    p.add_argument("--merged-csv", default="merged_features.csv")
+    p.add_argument("--results-csv",default="results_summary.csv")
+    p.add_argument("--dashboard",  default="ml_combined_dashboard.png")
+    p.add_argument("--shap-plot",  default="shap_summary.png")
+    p.add_argument("--shap-csv",   default="shap_importance.csv")
+    p.add_argument("--workers",    type=int, default=1)
+    p.add_argument("--skip-extraction", action="store_true")
+    p.add_argument("--merge-how",  default="inner")
+    p.add_argument("--cas-threshold", type=int, default=2)
+    return p
+
+
+if __name__ == "__main__":
+    if len(sys.argv) > 1:
+        args = _build_parser().parse_args()
+        run_pipeline(
+            image_dir       = args.image_dir,
+            label_dir       = args.label_dir,
+            clinical_csv    = args.clinical,
+            mri_csv         = args.mri_csv,
+            merged_csv      = args.merged_csv,
+            results_csv     = args.results_csv,
+            dashboard_path  = args.dashboard,
+            shap_plot       = args.shap_plot,
+            shap_csv        = args.shap_csv,
+            n_workers       = args.workers,
+            skip_extraction = args.skip_extraction,
+            merge_how       = args.merge_how,
+            cas_threshold   = args.cas_threshold,
+        )
+    else:
+        image_dir = "data/train/image"
+        label_dir = "data/train/label"
+        clinical  = "clinical_characteristics.csv"
+        run_pipeline(image_dir, label_dir, clinical)

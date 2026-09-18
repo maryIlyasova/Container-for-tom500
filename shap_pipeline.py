@@ -1,5 +1,14 @@
 import pandas as pd
 import matplotlib.pyplot as plt
+plt.rcParams.update({
+    'font.size': 14,          # Основной размер текста
+    'axes.titlesize': 16,     # Размер заголовков осей
+    'axes.labelsize': 14,     # Размер подписей осей
+    'xtick.labelsize': 12,    # Размер меток по оси X
+    'ytick.labelsize': 12,    # Размер меток по оси Y
+    'legend.fontsize': 12,    # Размер шрифта в легенде
+    'figure.titlesize': 20    # Общий заголовок
+})
 
 # =========================
 # CONFIG
